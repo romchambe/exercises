@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const { sum, isTruthy, flatten } = require('../utils')
 
 const letters = [
   { regex: /one/, value: '1', },
@@ -13,11 +14,6 @@ const letters = [
   { regex: /nine/, value: '9', },
 ]
 
-const isTruthy = (val) => !!val
-const flatten = (acc, current) => {
-  return [...acc, ...current]
-}
-const sum = (array) => array.reduce((acc, current) => current + acc, 0)
 
 const regexParser = (input) => {
   return letters.map(({ regex, value }) => {
