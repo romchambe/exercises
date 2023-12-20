@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { sum, isTruthy } = require('../utils')
+const { sum, multiply } = require('../utils')
 
 const limits = {
   red: 12,
@@ -52,7 +52,7 @@ const getAnswer = () => {
       )
 
       const minimumGamesPower = arrayOfInputs.map(parseRow).map(({ maxOfSets }) => {
-        return Object.values(maxOfSets).reduce((acc, current) => current * acc, 1)
+        return multiply(Object.values(maxOfSets))
       })
 
       console.log('Answer to day 2 - part 1:', sum(possibleGames))
