@@ -1,7 +1,9 @@
 const fs = require('fs')
+const { connect } = require('http2')
 const path = require('path')
 
 const moves = [[-1, 0], [1, 0], [0, -1], [0, 1]]
+
 const getCandidates = (type, x, y) => {
   switch (type) {
     case '.':
@@ -25,10 +27,10 @@ const getCandidates = (type, x, y) => {
 
 const getGapValue = (direction, [type1, type2]) => {
   const valid = {
-    north: ['-', 'J', 'L', '0', 'I'],
-    south: ['-', 'F', '7', '0', 'I'],
-    east: ['|', 'F', 'L', '0', 'I'],
-    west: ['|', 'J', '7', '0', 'I'],
+    north: ['-', 'J', 'L', '0', 'I', 'o', 'X'],
+    south: ['-', 'F', '7', '0', 'I', 'o', 'X'],
+    east: ['|', 'F', 'L', '0', 'I', 'o', 'X'],
+    west: ['|', 'J', '7', '0', 'I', 'o', 'X'],
   }
 
   switch (direction) {
@@ -40,20 +42,19 @@ const getGapValue = (direction, [type1, type2]) => {
   }
 }
 
-class Summit {
+class Cell {
   constructor(type, x, y, graph) {
     this.x = x
     this.y = y
     this.type = type
     this.graph = graph
     this.distance = null
-    this.reachable = false
   }
 
   buildConnected() {
     const candidatesPosisitons = getCandidates(this.type, this.x, this.y)
 
-    // we get the candidate summits that are in the grid
+    // we get the candidate cells that are in the grid
     const candidatesInGrid = candidatesPosisitons
       .map(
         ([x, y]) => this.graph.getByPosition(x, y)
@@ -81,20 +82,17 @@ class Graph {
   constructor(rows) {
     this.buildGraph(rows)
     this.connect()
-    this.explore(this.entry, 0)
   }
 
   buildGraph(rows) {
     this.rows = rows.map(
       (row, y) => row.split('').map(
         (type, x) => {
-          const summit = new Summit(type, x, y, this)
-
+          const cell = new Cell(type, x, y, this)
           if (type === 'S') {
-            this.entry = summit
+            this.entry = cell
           }
-
-          return summit
+          return cell
         }
       )
     )
@@ -113,31 +111,30 @@ class Graph {
   }
 
   connect() {
-    this.rows.forEach((row) => row.forEach(summit => summit.buildConnected()))
+    this.rows.forEach((row) => row.forEach(cell => cell.buildConnected()))
   }
 
-  explore(fromSummit, distance) {
+  explore() {
     const lastLayer = {
-      summits: [fromSummit],
-      distance
+      cells: [this.entry],
+      distance: 0
     }
 
-    while (lastLayer.summits.find(s => s.connected.length > 0)) {
-      // We set the distance of the summit : it has been visited
-      lastLayer.summits.forEach(s => s.distance = lastLayer.distance)
+    while (lastLayer.cells.find(c => c.connected.length > 0)) {
+      // We set the distance of the cell : it has been visited
+      lastLayer.cells.forEach(s => s.distance = lastLayer.distance)
 
-      // We check which summit are connected to the current layer and have not been visited yet
-      lastLayer.summits = lastLayer.summits
+      // We check which cells are connected to the current layer and have not been visited yet
+      lastLayer.cells = lastLayer.cells
         .map(
-          currentLayerSummit => currentLayerSummit.connected
+          currentLayerCell => currentLayerCell.connected
             .filter(
-              nextLayerSummit => nextLayerSummit.distance === null
+              nextLayerCell => nextLayerCell.distance === null
             )
         )
         .reduce(
           (nextLayer, connectedList) => ([...nextLayer, ...connectedList]), []
         )
-
       lastLayer.distance += 1
     }
 
@@ -153,71 +150,80 @@ class Graph {
 }
 
 class BigGraph {
-  constructor(baseGraph) {
-    this.rows = baseGraph.rows.map(
-      (row, y) => row.map(
-        (summit, x) => {
-          if (summit.distance === null) {
-            return baseGraph.neighbourIsOut(x, y) ? '0' : 'I'
-          }
-
-          return summit.type
-        }
-      )
-    )
-
-    this.base = baseGraph
-
-    this.expand()
+  constructor(graph) {
+    this.rows = []
+    this.base = graph
+    this.buildGraph()
+    this.buildGaps()
   }
 
-  expand() {
-    const dimensionY = this.rows.length
-    this.rows.forEach(row => {
-      const dimensionX = row.length
-      for (let x = 0; x < dimensionX; x++) {
-        row.splice(x * 2 + 1, 0, '?')
+  buildGraph() {
+    this.base.rows.forEach(
+      (baseRow, y) => {
+        const row = []
+
+        baseRow.forEach(
+          (cell, x) => {
+            const getCellValue = () => {
+              if (cell.distance === null) {
+                // If the cell is not part of the loop and is on an edge, we initialize it with 0 else I
+                return this.base.neighbourIsOut(x, y) ? '0' : 'I'
+              }
+
+              return cell.type
+            }
+
+            row.push(getCellValue())
+            row.push('?')
+          }
+        )
+
+        this.rows.push(row)
+        this.rows.push(Array(this.rows[0].length).fill('?'))
       }
-    })
-    for (let y = 0; y < dimensionY; y++) {
-      this.rows.splice(y * 2 + 1, 0, Array(this.rows[0].length).fill('?'))
-    }
+    )
   }
 
   buildGaps() {
     this.rows = this.rows.map((row, y) => {
-      if (y % 2 === 0) {
-        return row.map((cell, x) => {
-          if (cell === '?') {
-            const baseX = Math.floor(x / 2)
-            const baseY = Math.floor(y / 2)
-            const west = this.base.getByPosition(baseX, baseY)
-            const east = this.base.getByPosition(baseX + 1, baseY)
+      const isNorthSouthGap = y % 2 === 0
 
-            return !east || !west || east.distance === null || west.distance === null
-              ? 'o'
-              : getGapValue('NS', [west.type, east.type])
-          }
-          return cell
-        })
-      }
+      return row.map((cell, x) => {
+        // This is the case where a gap on a row that only contains gaps (y % 2 === 0) 
+        // is surrounded by gaps north and south (x % 2 === 1)
+        if (y % 2 === 1 && x % 2 === 1) {
+          return 'o'
+        }
 
-      if (y % 2 === 1) {
-        return row.map((_, x) => {
-          const baseX = Math.floor(x / 2)
-          const baseY = Math.floor(y / 2)
-          const north = this.base.getByPosition(baseX, baseY)
-          const south = this.base.getByPosition(baseX, baseY + 1)
-          if (!north || !south || north.distance === null || south.distance === null) return 'o'
-          return x % 2 === 0 ? getGapValue('WE', [north.type, south.type]) : 'o'
-        })
-      }
+        const baseX = Math.floor(x / 2)
+        const baseY = Math.floor(y / 2)
+
+        const neighbourPipes = [
+          this.base.getByPosition(baseX, baseY),
+          isNorthSouthGap
+            ? this.base.getByPosition(baseX + 1, baseY)
+            : this.base.getByPosition(baseX, baseY + 1)
+        ]
+
+        if (cell === '?') {
+          return (
+            // one of the neighbour pipes is out of the graph
+            neighbourPipes.includes(null)
+            // one of the neighbour pipes is not part of the main loop
+            || neighbourPipes.find(cell => cell.distance === null)
+          )
+            ? 'o'
+            : getGapValue(isNorthSouthGap ? 'NS' : 'WE', neighbourPipes.map(({ type }) => type))
+        }
+
+        return cell
+      })
     })
   }
 
   explore() {
     const dimension = this.rows.length
-    const edges = [0, this.rows.length - 1]
+    const edges = [0, this.rows.length - 2]
 
     for (let x of edges) {
       for (let y = 0; y < dimension; y++) {
@@ -236,14 +242,20 @@ class BigGraph {
     }
   }
 
-  conquer(x, y) {
-    this.rows[y][x] = '0'
-    console.log(x, y)
-    moves.forEach(([moveX, moveY]) => {
-      if (this.isInGraph(x + moveX, y + moveY) && this.conquerable(x + moveX, y + moveY)) {
-        this.conquer(x + moveX, y + moveY)
-      }
-    })
+  conquer(initialX, initialY) {
+    let cells = [[initialX, initialY]]
+
+    while (cells.length > 0) {
+      const [[x, y]] = cells.splice(0, 1)
+
+      moves.forEach(([moveX, moveY]) => {
+        if (this.isInGraph(x + moveX, y + moveY) && this.conquerable(x + moveX, y + moveY)) {
+          cells.push([x + moveX, y + moveY])
+          this.rows[y + moveY][x + moveX] = '0'
+        }
+      })
+
+    }
   }
 
   conquerable(x, y) {
@@ -257,11 +269,10 @@ class BigGraph {
   count() {
     return this.rows.reduce(
       (sum, row) => sum + row.reduce(
-        (rowSum, summit) => summit === 'I' ? rowSum + 1 : rowSum, 0)
+        (rowSum, cell) => cell === 'I' ? rowSum + 1 : rowSum, 0)
       , 0
     )
   }
-
   print() {
     this.rows.forEach(row => {
       process.stdout.write(row.join('') + '\n')
@@ -275,13 +286,11 @@ const getAnswer = () => {
     (err, data) => {
       const rows = data.toString().split('\n')
       const graph = new Graph(rows)
+      graph.explore()
       console.log('Answer to part 1 :', graph.maxDistance,)
 
       const bigGraph = new BigGraph(graph)
-      bigGraph.buildGaps()
-      bigGraph.print()
       bigGraph.explore()
-
       console.log('Answer to part 2 :', bigGraph.count(),)
     }
   )
